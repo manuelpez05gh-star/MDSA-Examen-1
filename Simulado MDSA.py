@@ -3,10 +3,11 @@ import numpy as np
 import pandas as pd
 import scipy.stats as stats
 import matplotlib.pyplot as plt
+import warnings
 import io
 
 # ==============================================================================
-# 0. CONFIGURACIÓN INICIAL Y ESTILOS CSS (BLACK & BLUE THEME)
+# 0. CONFIGURACIÓN INICIAL, FUNCIONES AUXILIARES Y ESTILOS CSS
 # ==============================================================================
 st.set_page_config(
     page_title="Plataforma de Simulación Actuarial",
@@ -14,6 +15,23 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+def construir_multinomial_1d(n_trials, probs):
+    """
+    Construye una variable aleatoria discreta compatible con SciPy (pmf, cdf, ppf, rvs)
+    a partir de una distribución Multinomial(n, p) proyectada sobre el índice de sus categorías.
+    """
+    probs = np.array(probs, dtype=float)
+    probs = np.maximum(probs, 1e-6)
+    probs = probs / probs.sum()
+    
+    poly = np.array([1.0])
+    for _ in range(max(int(n_trials), 1)):
+        poly = np.convolve(poly, probs)
+        
+    xk = np.arange(len(poly), dtype=int)
+    pk = poly / poly.sum()
+    return stats.rv_discrete(name='multinomial_1d', values=(xk, pk)), probs
 
 st.markdown("""
 <style>
@@ -74,15 +92,21 @@ with st.sidebar:
     st.markdown("<h4 style='color: #4FC3F7;'>2. Especificación del Modelo</h4>", unsafe_allow_html=True)
     
     dist_map = {
-        "t-Student (Finanzas)": "t",
-        "Normal (Gaussiana)": "norm",
-        "Lognormal": "lnorm",
-        "Laplace": "laplace",
-        "Exponencial": "exp",
-        "Chi-cuadrada": "chisq",
+        "t-Student (Continua)": "t",
+        "Normal / Gaussiana (Continua)": "norm",
+        "Lognormal (Continua)": "lnorm",
+        "Laplace (Continua)": "laplace",
+        "Exponencial (Continua)": "exp",
+        "Chi-cuadrada (Continua)": "chisq",
+        "Erlang (Continua)": "erlang",
         "Poisson (Discreta)": "pois",
         "Geométrica (Discreta)": "geom",
-        "Binomial (Discreta)": "binom"
+        "Binomial (Discreta)": "binom",
+        "Bernoulli (Discreta)": "bernoulli",
+        "Binomial Negativa (Discreta)": "nbinom",
+        "Hipergeométrica (Discreta)": "hypergeom",
+        "Uniforme Discreta": "randint",
+        "Multinomial (Discreta)": "multinomial"
     }
     dist_sel = st.selectbox("Distribución Teórica:", list(dist_map.keys()), index=0) 
     dist_test = dist_map[dist_sel]
@@ -103,7 +127,7 @@ with st.sidebar:
             elif dist_test == "lnorm":
                 params_manuales['s'] = st.number_input("Forma (s / sdlog):", min_value=0.0001, value=1.0, step=0.1)
                 params_manuales['loc'] = st.number_input("Ubicación (loc):", value=0.0, step=0.1)
-                params_manuales['scale'] = st.number_input("Escala (scale / exp(meanlog)):", min_value=0.0001, value=1.0, step=0.1)
+                params_manuales['scale'] = st.number_input("Escala (scale):", min_value=0.0001, value=1.0, step=0.1)
             elif dist_test == "laplace":
                 params_manuales['loc'] = st.number_input("Ubicación (loc):", value=0.0, step=0.1)
                 params_manuales['scale'] = st.number_input("Escala (scale):", min_value=0.0001, value=2.0, step=0.1)
@@ -114,6 +138,10 @@ with st.sidebar:
                 params_manuales['df'] = st.number_input("Grados de libertad (df):", min_value=0.1, value=7.0, step=1.0)
                 params_manuales['loc'] = st.number_input("Ubicación (loc):", value=0.0, step=0.1)
                 params_manuales['scale'] = st.number_input("Escala (scale):", min_value=0.0001, value=1.0, step=0.1)
+            elif dist_test == "erlang":
+                params_manuales['k_er'] = st.number_input("Forma entera (k):", min_value=1, value=3, step=1)
+                params_manuales['loc_er'] = st.number_input("Ubicación (loc):", value=0.0, step=0.1)
+                params_manuales['scale_er'] = st.number_input("Escala (1/λ):", min_value=0.0001, value=2.0, step=0.1)
             elif dist_test == "pois":
                 params_manuales['lambda'] = st.number_input("Tasa de ocurrencia (λ):", min_value=0.0001, value=4.0, step=0.5)
             elif dist_test == "geom":
@@ -121,6 +149,21 @@ with st.sidebar:
             elif dist_test == "binom":
                 params_manuales['n_binom'] = st.number_input("Número de ensayos (n):", min_value=1, value=10, step=1)
                 params_manuales['p_binom'] = st.number_input("Probabilidad de éxito (p):", min_value=0.0001, max_value=1.0, value=0.5, step=0.05)
+            elif dist_test == "bernoulli":
+                params_manuales['p_bern'] = st.number_input("Probabilidad de éxito (p):", min_value=0.0001, max_value=0.9999, value=0.5, step=0.05)
+            elif dist_test == "nbinom":
+                params_manuales['r_nb'] = st.number_input("Éxitos requeridos (r):", min_value=1, value=5, step=1)
+                params_manuales['p_nb'] = st.number_input("Probabilidad de éxito (p):", min_value=0.0001, max_value=0.9999, value=0.5, step=0.05)
+            elif dist_test == "hypergeom":
+                params_manuales['M_hyp'] = st.number_input("Población total (M):", min_value=2, value=50, step=5)
+                params_manuales['K_hyp'] = st.number_input("Éxitos en la población (K):", min_value=1, max_value=int(params_manuales['M_hyp']), value=min(20, int(params_manuales['M_hyp'])), step=1)
+                params_manuales['N_hyp'] = st.number_input("Tamaño de extracción (N):", min_value=1, max_value=int(params_manuales['M_hyp']), value=min(10, int(params_manuales['M_hyp'])), step=1)
+            elif dist_test == "randint":
+                params_manuales['low_ud'] = st.number_input("Cota inferior inclusiva (a):", value=-5, step=1)
+                params_manuales['high_ud'] = st.number_input("Cota superior inclusiva (b):", min_value=int(params_manuales['low_ud']) + 1, value=max(5, int(params_manuales['low_ud']) + 1), step=1)
+            elif dist_test == "multinomial":
+                params_manuales['n_multi'] = st.number_input("Número de ensayos (n):", min_value=1, value=1, step=1)
+                params_manuales['p_multi_str'] = st.text_input("Probabilidades (separadas por coma):", value="0.2, 0.5, 0.3")
                 
     st.markdown("<br>", unsafe_allow_html=True)
     ejecutar = st.button("▶ Procesar Modelo Matemático")
@@ -138,7 +181,7 @@ elif file_csv is not None and col_csv is not None:
 
 dist_obj = None
 fit_params = ()
-es_discreta = dist_test in ["pois", "geom", "binom"]
+es_discreta = dist_test in ["pois", "geom", "binom", "bernoulli", "nbinom", "hypergeom", "randint", "multinomial"]
 
 if len(data) >= 2:
     if modo_estimacion == "Automático (MLE)":
@@ -149,7 +192,6 @@ if len(data) >= 2:
             fit_params = stats.norm.fit(data)
             dist_obj = stats.norm(*fit_params)
         elif dist_test == "lnorm":
-            # Ajuste seguro desplazando si existen datos negativos
             shift = abs(min(data)) + 1e-4 if min(data) <= 0 else 0
             fit_params = stats.lognorm.fit(data + shift)
             dist_obj = stats.lognorm(*fit_params)
@@ -162,19 +204,24 @@ if len(data) >= 2:
         elif dist_test == "chisq":
             fit_params = stats.chi2.fit(data)
             dist_obj = stats.chi2(*fit_params)
+        elif dist_test == "erlang":
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                a_g, loc_g, scale_g = stats.gamma.fit(data)
+                k_er = max(int(round(a_g)), 1)
+                _, loc_er, scale_er = stats.gamma.fit(data, fa=k_er)
+            fit_params = (k_er, loc_er, scale_er)
+            dist_obj = stats.erlang(a=k_er, loc=loc_er, scale=scale_er)
         elif dist_test == "pois":
-            # Estimador MLE para Poisson: lambda = media muestral (restringida > 0)
             lam_est = float(max(np.mean(data), 0.0001))
             fit_params = (lam_est,)
             dist_obj = stats.poisson(mu=lam_est)
         elif dist_test == "geom":
-            # Estimador MLE para Geométrica en soporte {1, 2, ...}: p = 1 / media
             media_pos = max(float(np.mean(data)), 1.0001)
             p_est = float(np.clip(1.0 / media_pos, 0.0001, 1.0))
             fit_params = (p_est,)
             dist_obj = stats.geom(p=p_est)
         elif dist_test == "binom":
-            # Estimación por Método de Momentos / MLE truncado para Binomial
             media_b = max(float(np.mean(data)), 0.01)
             var_b = float(np.var(data, ddof=1))
             if var_b < media_b and media_b > 0:
@@ -186,6 +233,42 @@ if len(data) >= 2:
                 p_est = float(np.clip(media_b / n_est, 0.0001, 0.9999))
             fit_params = (n_est, p_est)
             dist_obj = stats.binom(n=n_est, p=p_est)
+        elif dist_test == "bernoulli":
+            prop_pos = np.mean(data > 0) if (np.min(data) < 0 or np.max(data) > 1) else np.mean(data)
+            p_bern = float(np.clip(prop_pos, 0.0001, 0.9999))
+            fit_params = (p_bern,)
+            dist_obj = stats.bernoulli(p=p_bern)
+        elif dist_test == "nbinom":
+            media_nb = max(float(np.mean(np.maximum(data, 0))), 0.01)
+            var_nb = float(np.var(data, ddof=1))
+            if var_nb > media_nb:
+                p_nb = float(np.clip(media_nb / var_nb, 0.0001, 0.9999))
+                r_nb = max(int(round((media_nb ** 2) / (var_nb - media_nb))), 1)
+            else:
+                p_nb = 0.5
+                r_nb = max(int(round(media_nb)), 1)
+            fit_params = (r_nb, p_nb)
+            dist_obj = stats.nbinom(n=r_nb, p=p_nb)
+        elif dist_test == "hypergeom":
+            N_hyp = max(int(round(np.max(np.abs(data)))), 10)
+            M_hyp = N_hyp * 2
+            media_pos = float(np.clip(np.mean(np.maximum(data, 0)), 1.0, N_hyp - 1))
+            K_hyp = int(np.clip(round(media_pos * (M_hyp / N_hyp)), 1, M_hyp - 1))
+            fit_params = (M_hyp, K_hyp, N_hyp)
+            dist_obj = stats.hypergeom(M=M_hyp, n=K_hyp, N=N_hyp)
+        elif dist_test == "randint":
+            low_ud = int(np.floor(np.min(data)))
+            high_ud = int(np.ceil(np.max(data)))
+            if high_ud <= low_ud:
+                high_ud = low_ud + 1
+            fit_params = (low_ud, high_ud)
+            dist_obj = stats.randint(low=low_ud, high=high_ud + 1)
+        elif dist_test == "multinomial":
+            k_cat = 5
+            datos_cat = np.clip(np.round(data[data >= 0]), 0, k_cat - 1).astype(int) if np.any(data >= 0) else np.zeros(10, dtype=int)
+            conteos = np.bincount(datos_cat, minlength=k_cat)[:k_cat] + 1e-4
+            dist_obj, pk_norm = construir_multinomial_1d(1, conteos)
+            fit_params = (1, k_cat, np.round(pk_norm, 4).tolist())
     else:
         if dist_test == "t":
             dist_obj = stats.t(df=params_manuales['df_t'], loc=params_manuales['loc_t'], scale=params_manuales['scale_t'])
@@ -199,18 +282,38 @@ if len(data) >= 2:
             dist_obj = stats.expon(loc=params_manuales['loc'], scale=params_manuales['scale'])
         elif dist_test == "chisq":
             dist_obj = stats.chi2(df=params_manuales['df'], loc=params_manuales['loc'], scale=params_manuales['scale'])
+        elif dist_test == "erlang":
+            dist_obj = stats.erlang(a=int(params_manuales['k_er']), loc=params_manuales['loc_er'], scale=params_manuales['scale_er'])
         elif dist_test == "pois":
             dist_obj = stats.poisson(mu=params_manuales['lambda'])
         elif dist_test == "geom":
             dist_obj = stats.geom(p=params_manuales['p_geom'])
         elif dist_test == "binom":
             dist_obj = stats.binom(n=int(params_manuales['n_binom']), p=params_manuales['p_binom'])
+        elif dist_test == "bernoulli":
+            dist_obj = stats.bernoulli(p=params_manuales['p_bern'])
+        elif dist_test == "nbinom":
+            dist_obj = stats.nbinom(n=int(params_manuales['r_nb']), p=params_manuales['p_nb'])
+        elif dist_test == "hypergeom":
+            dist_obj = stats.hypergeom(M=int(params_manuales['M_hyp']), n=int(params_manuales['K_hyp']), N=int(params_manuales['N_hyp']))
+        elif dist_test == "randint":
+            dist_obj = stats.randint(low=int(params_manuales['low_ud']), high=int(params_manuales['high_ud']) + 1)
+        elif dist_test == "multinomial":
+            try:
+                p_list = [float(x.strip()) for x in params_manuales['p_multi_str'].split(",") if x.strip()]
+                if len(p_list) < 2:
+                    p_list = [0.5, 0.5]
+            except Exception:
+                p_list = [0.2, 0.5, 0.3]
+            dist_obj, _ = construir_multinomial_1d(int(params_manuales['n_multi']), p_list)
 
 # ==============================================================================
 # 3. RENDERIZADO DEL PANEL PRINCIPAL
 # ==============================================================================
 if len(data) >= 2:
-    ks_stat, ks_pval = stats.kstest(data, dist_obj.cdf)
+    # Función segura de CDF para evitar NaNs en distribuciones discretas como Hipergeométrica
+    cdf_evaluar = (lambda x: dist_obj.cdf(np.floor(x))) if es_discreta else dist_obj.cdf
+    ks_stat, ks_pval = stats.kstest(data, cdf_evaluar)
     
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 Diagnóstico", "📜 Reporte K-S", "📋 Análisis Estadístico", 
@@ -239,7 +342,7 @@ if len(data) >= 2:
             ax1.hist(data, bins=30, density=True, color="#075985", edgecolor="#0284C7", alpha=0.7, label="Empírica")
             
             if es_discreta:
-                x_disc = np.unique(np.round(x_grid))
+                x_disc = np.unique(np.round(x_grid)).astype(int)
                 y_prob = dist_obj.pmf(x_disc)
                 ax1.plot(x_disc, y_prob, color="#00E5FF", lw=2, marker="o", markersize=4, label="Teórica (PMF)")
                 ax1.set_title(f"Función de Masa (PMF) - {dist_sel}")
@@ -254,7 +357,7 @@ if len(data) >= 2:
         with c2:
             fig2, ax2 = plt.subplots(figsize=(6, 4))
             ax2.step(np.sort(data), np.arange(1, len(data) + 1)/len(data), color="#0284C7", lw=2, label="Fn(x) Empírica")
-            ax2.plot(x_grid, dist_obj.cdf(x_grid), color="#00E5FF", lw=2, linestyle="--", label="F(x) Teórica")
+            ax2.plot(x_grid, cdf_evaluar(x_grid), color="#00E5FF", lw=2, linestyle="--", label="F(x) Teórica")
             ax2.set_title("Función de Distribución Acumulada (FDA)")
             ax2.legend(frameon=False)
             ax2.grid(True, alpha=0.3)
@@ -272,12 +375,22 @@ if len(data) >= 2:
                 params_str = f"<b>Ubicación (loc):</b> {float(fit_params[0]):.4f} &nbsp;|&nbsp; <b>Escala (scale):</b> {float(fit_params[1]):.4f}"
             elif dist_test == "chisq":
                 params_str = f"<b>Grados de libertad (df):</b> {float(fit_params[0]):.4f} &nbsp;|&nbsp; <b>Ubicación (loc):</b> {float(fit_params[1]):.4f} &nbsp;|&nbsp; <b>Escala (scale):</b> {float(fit_params[2]):.4f}"
+            elif dist_test == "erlang":
+                params_str = f"<b>Forma entera (k):</b> {int(fit_params[0])} &nbsp;|&nbsp; <b>Ubicación (loc):</b> {float(fit_params[1]):.4f} &nbsp;|&nbsp; <b>Escala (scale):</b> {float(fit_params[2]):.4f}"
             elif dist_test == "pois":
                 params_str = f"<b>Tasa de ocurrencia (λ):</b> {float(fit_params[0]):.4f}"
-            elif dist_test == "geom":
+            elif dist_test in ["geom", "bernoulli"]:
                 params_str = f"<b>Probabilidad de éxito (p):</b> {float(fit_params[0]):.4f}"
             elif dist_test == "binom":
                 params_str = f"<b>Número de ensayos (n):</b> {int(fit_params[0])} &nbsp;|&nbsp; <b>Probabilidad de éxito (p):</b> {float(fit_params[1]):.4f}"
+            elif dist_test == "nbinom":
+                params_str = f"<b>Éxitos requeridos (r):</b> {int(fit_params[0])} &nbsp;|&nbsp; <b>Probabilidad de éxito (p):</b> {float(fit_params[1]):.4f}"
+            elif dist_test == "hypergeom":
+                params_str = f"<b>Población total (M):</b> {int(fit_params[0])} &nbsp;|&nbsp; <b>Éxitos en población (K):</b> {int(fit_params[1])} &nbsp;|&nbsp; <b>Extracciones (N):</b> {int(fit_params[2])}"
+            elif dist_test == "randint":
+                params_str = f"<b>Cota inferior inclusiva (a):</b> {int(fit_params[0])} &nbsp;|&nbsp; <b>Cota superior inclusiva (b):</b> {int(fit_params[1])}"
+            elif dist_test == "multinomial":
+                params_str = f"<b>Ensayos (n):</b> {int(fit_params[0])} &nbsp;|&nbsp; <b>Categorías (k):</b> {int(fit_params[1])} &nbsp;|&nbsp; <b>Vector de Probabilidades (p):</b> {fit_params[2]}"
             
             st.markdown(f"""<div class="well"><b>⚙️ Parámetros Optimizados:</b><br>{params_str}</div>""", unsafe_allow_html=True)
 
@@ -372,7 +485,7 @@ if len(data) >= 2:
     with tab5:
         st.markdown("<br><h4>Prueba de Excepciones Históricas (Kupiec POF)</h4>", unsafe_allow_html=True)
         
-        var_teorico = dist_obj.ppf(alpha)
+        var_teorico = float(dist_obj.ppf(alpha))
         
         excepciones = data[data < var_teorico]
         n_obs = len(data)
