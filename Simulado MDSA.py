@@ -17,6 +17,10 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+    header { visibility: hidden; }
+    
     .stApp { background-color: #0A0A0A; color: #E2E8F0; }
     h1, h2, h3 { color: #4FC3F7 !important; font-weight: 700; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
     h4, h5 { color: #90CAF9 !important; font-weight: 500; }
@@ -27,7 +31,7 @@ st.markdown("""
     .stButton > button { background-color: #0284C7 !important; color: #ffffff !important; border: 1px solid #0369A1; font-weight: bold; width: 100%; border-radius: 6px; transition: 0.3s; }
     .stButton > button:hover { background-color: #0369A1 !important; box-shadow: 0 0 10px rgba(2, 132, 199, 0.5); }
     .well { background-color: #111827; border-left: 4px solid #00B4D8; padding: 15px; border-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
-    .metric-card { background-color: #111827; border: 1px solid #1F2937; padding: 20px; border-radius: 8px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.4); }
+    .metric-card { background-color: #111827; border: 1px solid #1F2937; padding: 15px; border-radius: 8px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.4); }
     .alert-danger { background-color: rgba(153, 27, 27, 0.2); color: #FCA5A5; border: 1px solid #7F1D1D; padding: 15px; border-radius: 6px; margin-top: 20px; }
     .alert-success { background-color: rgba(6, 78, 59, 0.2); color: #6EE7B7; border: 1px solid #064E3B; padding: 15px; border-radius: 6px; margin-top: 20px; }
 </style>
@@ -69,7 +73,17 @@ with st.sidebar:
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown("<h4 style='color: #4FC3F7;'>2. Especificación del Modelo</h4>", unsafe_allow_html=True)
     
-    dist_map = {"t-Student (Finanzas)": "t", "Normal (Gaussiana)": "norm", "Lognormal": "lnorm", "Laplace": "laplace", "Exponencial": "exp", "Chi-cuadrada": "chisq"}
+    dist_map = {
+        "t-Student (Finanzas)": "t",
+        "Normal (Gaussiana)": "norm",
+        "Lognormal": "lnorm",
+        "Laplace": "laplace",
+        "Exponencial": "exp",
+        "Chi-cuadrada": "chisq",
+        "Poisson (Discreta)": "pois",
+        "Geométrica (Discreta)": "geom",
+        "Binomial (Discreta)": "binom"
+    }
     dist_sel = st.selectbox("Distribución Teórica:", list(dist_map.keys()), index=0) 
     dist_test = dist_map[dist_sel]
     
@@ -80,20 +94,39 @@ with st.sidebar:
     if modo_estimacion == "Manual":
         with st.expander("Parámetros Manuales", expanded=True):
             if dist_test == "t":
-                params_manuales['df_t'] = st.number_input("Grados de libertad (ν):", value=3.0, step=0.5)
+                params_manuales['df_t'] = st.number_input("Grados de libertad (ν):", min_value=0.1, value=3.0, step=0.5)
                 params_manuales['loc_t'] = st.number_input("Ubicación (loc):", value=0.0, step=0.1)
-                params_manuales['scale_t'] = st.number_input("Escala (scale):", value=2.5, step=0.1)
+                params_manuales['scale_t'] = st.number_input("Escala (scale):", min_value=0.0001, value=2.5, step=0.1)
             elif dist_test == "norm":
                 params_manuales['mean'] = st.number_input("Media (μ):", value=0.0, step=0.1)
-                params_manuales['sd'] = st.number_input("Desviación (σ):", value=2.0, step=0.1)
-            else:
-                st.info("Para esta distribución, se sugiere usar el modo Automático (MLE).")
+                params_manuales['sd'] = st.number_input("Desviación (σ):", min_value=0.0001, value=2.0, step=0.1)
+            elif dist_test == "lnorm":
+                params_manuales['s'] = st.number_input("Forma (s / sdlog):", min_value=0.0001, value=1.0, step=0.1)
+                params_manuales['loc'] = st.number_input("Ubicación (loc):", value=0.0, step=0.1)
+                params_manuales['scale'] = st.number_input("Escala (scale / exp(meanlog)):", min_value=0.0001, value=1.0, step=0.1)
+            elif dist_test == "laplace":
+                params_manuales['loc'] = st.number_input("Ubicación (loc):", value=0.0, step=0.1)
+                params_manuales['scale'] = st.number_input("Escala (scale):", min_value=0.0001, value=2.0, step=0.1)
+            elif dist_test == "exp":
+                params_manuales['loc'] = st.number_input("Ubicación (loc):", value=0.0, step=0.1)
+                params_manuales['scale'] = st.number_input("Escala (1/λ):", min_value=0.0001, value=5.0, step=0.5)
+            elif dist_test == "chisq":
+                params_manuales['df'] = st.number_input("Grados de libertad (df):", min_value=0.1, value=7.0, step=1.0)
+                params_manuales['loc'] = st.number_input("Ubicación (loc):", value=0.0, step=0.1)
+                params_manuales['scale'] = st.number_input("Escala (scale):", min_value=0.0001, value=1.0, step=0.1)
+            elif dist_test == "pois":
+                params_manuales['lambda'] = st.number_input("Tasa de ocurrencia (λ):", min_value=0.0001, value=4.0, step=0.5)
+            elif dist_test == "geom":
+                params_manuales['p_geom'] = st.number_input("Probabilidad de éxito (p):", min_value=0.0001, max_value=1.0, value=0.25, step=0.05)
+            elif dist_test == "binom":
+                params_manuales['n_binom'] = st.number_input("Número de ensayos (n):", min_value=1, value=10, step=1)
+                params_manuales['p_binom'] = st.number_input("Probabilidad de éxito (p):", min_value=0.0001, max_value=1.0, value=0.5, step=0.05)
                 
     st.markdown("<br>", unsafe_allow_html=True)
     ejecutar = st.button("▶ Procesar Modelo Matemático")
 
 # ==============================================================================
-# 2. PROCESAMIENTO DE DATOS Y ESTIMACIÓN MLE
+# 2. PROCESAMIENTO DE DATOS Y ESTIMACIÓN DE PARÁMETROS
 # ==============================================================================
 data = np.array([])
 if origen_datos == "Generar Datos Simulados":
@@ -105,19 +138,73 @@ elif file_csv is not None and col_csv is not None:
 
 dist_obj = None
 fit_params = ()
+es_discreta = dist_test in ["pois", "geom", "binom"]
 
 if len(data) >= 2:
     if modo_estimacion == "Automático (MLE)":
-        if dist_test == "t": fit_params = stats.t.fit(data); dist_obj = stats.t(*fit_params)
-        elif dist_test == "norm": fit_params = stats.norm.fit(data); dist_obj = stats.norm(*fit_params)
-        elif dist_test == "lnorm": fit_params = stats.lognorm.fit(data); dist_obj = stats.lognorm(*fit_params)
-        elif dist_test == "laplace": fit_params = stats.laplace.fit(data); dist_obj = stats.laplace(*fit_params)
-        elif dist_test == "exp": fit_params = stats.expon.fit(data); dist_obj = stats.expon(*fit_params)
-        elif dist_test == "chisq": fit_params = stats.chi2.fit(data); dist_obj = stats.chi2(*fit_params)
+        if dist_test == "t":
+            fit_params = stats.t.fit(data)
+            dist_obj = stats.t(*fit_params)
+        elif dist_test == "norm":
+            fit_params = stats.norm.fit(data)
+            dist_obj = stats.norm(*fit_params)
+        elif dist_test == "lnorm":
+            # Ajuste seguro desplazando si existen datos negativos
+            shift = abs(min(data)) + 1e-4 if min(data) <= 0 else 0
+            fit_params = stats.lognorm.fit(data + shift)
+            dist_obj = stats.lognorm(*fit_params)
+        elif dist_test == "laplace":
+            fit_params = stats.laplace.fit(data)
+            dist_obj = stats.laplace(*fit_params)
+        elif dist_test == "exp":
+            fit_params = stats.expon.fit(data)
+            dist_obj = stats.expon(*fit_params)
+        elif dist_test == "chisq":
+            fit_params = stats.chi2.fit(data)
+            dist_obj = stats.chi2(*fit_params)
+        elif dist_test == "pois":
+            # Estimador MLE para Poisson: lambda = media muestral (restringida > 0)
+            lam_est = float(max(np.mean(data), 0.0001))
+            fit_params = (lam_est,)
+            dist_obj = stats.poisson(mu=lam_est)
+        elif dist_test == "geom":
+            # Estimador MLE para Geométrica en soporte {1, 2, ...}: p = 1 / media
+            media_pos = max(float(np.mean(data)), 1.0001)
+            p_est = float(np.clip(1.0 / media_pos, 0.0001, 1.0))
+            fit_params = (p_est,)
+            dist_obj = stats.geom(p=p_est)
+        elif dist_test == "binom":
+            # Estimación por Método de Momentos / MLE truncado para Binomial
+            media_b = max(float(np.mean(data)), 0.01)
+            var_b = float(np.var(data, ddof=1))
+            if var_b < media_b and media_b > 0:
+                p_est = 1.0 - (var_b / media_b)
+                n_est = max(int(round(media_b / p_est)), 1)
+                p_est = float(np.clip(media_b / n_est, 0.0001, 0.9999))
+            else:
+                n_est = max(int(round(max(data))), 1)
+                p_est = float(np.clip(media_b / n_est, 0.0001, 0.9999))
+            fit_params = (n_est, p_est)
+            dist_obj = stats.binom(n=n_est, p=p_est)
     else:
-        if dist_test == "t": dist_obj = stats.t(df=params_manuales.get('df_t', 3), loc=params_manuales.get('loc_t', 0), scale=params_manuales.get('scale_t', 1))
-        elif dist_test == "norm": dist_obj = stats.norm(loc=params_manuales.get('mean', 0), scale=params_manuales.get('sd', 1))
-        else: dist_obj = stats.norm(0, 1)
+        if dist_test == "t":
+            dist_obj = stats.t(df=params_manuales['df_t'], loc=params_manuales['loc_t'], scale=params_manuales['scale_t'])
+        elif dist_test == "norm":
+            dist_obj = stats.norm(loc=params_manuales['mean'], scale=params_manuales['sd'])
+        elif dist_test == "lnorm":
+            dist_obj = stats.lognorm(s=params_manuales['s'], loc=params_manuales['loc'], scale=params_manuales['scale'])
+        elif dist_test == "laplace":
+            dist_obj = stats.laplace(loc=params_manuales['loc'], scale=params_manuales['scale'])
+        elif dist_test == "exp":
+            dist_obj = stats.expon(loc=params_manuales['loc'], scale=params_manuales['scale'])
+        elif dist_test == "chisq":
+            dist_obj = stats.chi2(df=params_manuales['df'], loc=params_manuales['loc'], scale=params_manuales['scale'])
+        elif dist_test == "pois":
+            dist_obj = stats.poisson(mu=params_manuales['lambda'])
+        elif dist_test == "geom":
+            dist_obj = stats.geom(p=params_manuales['p_geom'])
+        elif dist_test == "binom":
+            dist_obj = stats.binom(n=int(params_manuales['n_binom']), p=params_manuales['p_binom'])
 
 # ==============================================================================
 # 3. RENDERIZADO DEL PANEL PRINCIPAL
@@ -125,7 +212,10 @@ if len(data) >= 2:
 if len(data) >= 2:
     ks_stat, ks_pval = stats.kstest(data, dist_obj.cdf)
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Diagnóstico", "📜 Reporte K-S", "📋 Análisis Estadístico", "🔮 Monte Carlo & Riesgo", "📈 Backtesting VaR"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 Diagnóstico", "📜 Reporte K-S", "📋 Análisis Estadístico", 
+        "🔮 Monte Carlo & Riesgo", "📈 Backtesting VaR"
+    ])
     
     plt.style.use('dark_background')
     plt.rcParams.update({
@@ -147,8 +237,16 @@ if len(data) >= 2:
         with c1:
             fig1, ax1 = plt.subplots(figsize=(6, 4))
             ax1.hist(data, bins=30, density=True, color="#075985", edgecolor="#0284C7", alpha=0.7, label="Empírica")
-            ax1.plot(x_grid, dist_obj.pdf(x_grid), color="#00E5FF", lw=2.5, label="Teórica")
-            ax1.set_title(f"Función de Densidad (PDF) - {dist_sel}")
+            
+            if es_discreta:
+                x_disc = np.unique(np.round(x_grid))
+                y_prob = dist_obj.pmf(x_disc)
+                ax1.plot(x_disc, y_prob, color="#00E5FF", lw=2, marker="o", markersize=4, label="Teórica (PMF)")
+                ax1.set_title(f"Función de Masa (PMF) - {dist_sel}")
+            else:
+                ax1.plot(x_grid, dist_obj.pdf(x_grid), color="#00E5FF", lw=2.5, label="Teórica (PDF)")
+                ax1.set_title(f"Función de Densidad (PDF) - {dist_sel}")
+                
             ax1.legend(frameon=False)
             ax1.grid(True, alpha=0.3)
             st.pyplot(fig1)
@@ -170,14 +268,18 @@ if len(data) >= 2:
                 params_str = f"<b>Media (μ):</b> {float(fit_params[0]):.4f} &nbsp;|&nbsp; <b>Desviación (σ):</b> {float(fit_params[1]):.4f}"
             elif dist_test == "lnorm":
                 params_str = f"<b>Forma (s):</b> {float(fit_params[0]):.4f} &nbsp;|&nbsp; <b>Ubicación (loc):</b> {float(fit_params[1]):.4f} &nbsp;|&nbsp; <b>Escala (scale):</b> {float(fit_params[2]):.4f}"
-            elif dist_test == "laplace":
-                params_str = f"<b>Ubicación (loc):</b> {float(fit_params[0]):.4f} &nbsp;|&nbsp; <b>Escala (scale):</b> {float(fit_params[1]):.4f}"
-            elif dist_test == "exp":
+            elif dist_test in ["laplace", "exp"]:
                 params_str = f"<b>Ubicación (loc):</b> {float(fit_params[0]):.4f} &nbsp;|&nbsp; <b>Escala (scale):</b> {float(fit_params[1]):.4f}"
             elif dist_test == "chisq":
                 params_str = f"<b>Grados de libertad (df):</b> {float(fit_params[0]):.4f} &nbsp;|&nbsp; <b>Ubicación (loc):</b> {float(fit_params[1]):.4f} &nbsp;|&nbsp; <b>Escala (scale):</b> {float(fit_params[2]):.4f}"
+            elif dist_test == "pois":
+                params_str = f"<b>Tasa de ocurrencia (λ):</b> {float(fit_params[0]):.4f}"
+            elif dist_test == "geom":
+                params_str = f"<b>Probabilidad de éxito (p):</b> {float(fit_params[0]):.4f}"
+            elif dist_test == "binom":
+                params_str = f"<b>Número de ensayos (n):</b> {int(fit_params[0])} &nbsp;|&nbsp; <b>Probabilidad de éxito (p):</b> {float(fit_params[1]):.4f}"
             
-            st.markdown(f"""<div class="well"><b>⚙️ Parámetros Optimizados (MLE):</b><br>{params_str}</div>""", unsafe_allow_html=True)
+            st.markdown(f"""<div class="well"><b>⚙️ Parámetros Optimizados:</b><br>{params_str}</div>""", unsafe_allow_html=True)
 
     # --- TAB 2: REPORTE ---
     with tab2:
@@ -201,9 +303,9 @@ if len(data) >= 2:
         """, language='text')
         
         if ks_pval < alpha:
-            st.markdown(f'<div class="alert-danger"><b>❌ RECHAZO DE HIPÓTESIS:</b> La evidencia estadística (p-value={ks_pval:.4g}) indica que los rendimientos no provienen de una distribución {dist_sel}. Se sugiere utilizar un modelo de colas más pesadas.</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="alert-danger"><b>❌ RECHAZO DE HIPÓTESIS:</b> La evidencia estadística (p-value={ks_pval:.4g}) indica que los datos no siguen una distribución {dist_sel}.</div>', unsafe_allow_html=True)
         else:
-            st.markdown(f'<div class="alert-success"><b>✅ VALIDACIÓN EXITOSA:</b> El p-value ({ks_pval:.4g}) es mayor que α. La distribución {dist_sel} captura adecuadamente la estructura probabilística de los datos.</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="alert-success"><b>✅ VALIDACIÓN EXITOSA:</b> El p-value ({ks_pval:.4g}) es mayor que α. La distribución {dist_sel} captura adecuadamente el comportamiento probabilístico de la muestra.</div>', unsafe_allow_html=True)
 
     # --- TAB 3: RESUMEN ESTADÍSTICO ---
     with tab3:
@@ -247,19 +349,18 @@ if len(data) >= 2:
                     
                     ax4b.hist(final_prices, bins=50, color="#0F172A", edgecolor="#0284C7", density=True)
                     ax4b.axvline(final_prices.mean(), color="#00E5FF", lw=2, label=f"Media: ${final_prices.mean():.2f}")
-                    ax4b.axvline(var_95, color="#FCA5A5", lw=2, linestyle="--", label=f"VaR: ${var_95:.2f}")
-                    ax4b.axvline(mejor_escenario, color="#6EE7B7", lw=2, linestyle="--", label=f"Mejor Esc: ${mejor_escenario:.2f}")
+                    ax4b.axvline(var_95, color="#FCA5A5", lw=2, linestyle="--", label=f"VaR ({(1-alpha)*100:.0f}%): ${var_95:.2f}")
+                    ax4b.axvline(mejor_escenario, color="#00FF66", lw=2, linestyle="--", label=f"Mejor Esc. ({(1-alpha)*100:.0f}%): ${mejor_escenario:.2f}")
                     ax4b.set_title(f"Distribución Terminal (T={int(n_days)})")
                     ax4b.legend(frameon=False); ax4b.grid(True, alpha=0.2)
                     
                     st.pyplot(fig4)
                     
-                    # 4 COLUMNAS DE MÉTRICAS (Incluyendo el Mejor Escenario)
                     rm1, rm2, rm3, rm4 = st.columns(4)
                     rm1.markdown(f'<div class="metric-card"><div style="color:#64748B;">Valor Esperado E[S(T)]</div><div style="font-size:24px; color:#4FC3F7; font-weight:bold;">${final_prices.mean():.2f}</div></div>', unsafe_allow_html=True)
-                    rm2.markdown(f'<div class="metric-card"><div style="color:#64748B;">Value at Risk ({(alpha)*100:.0f}%)</div><div style="font-size:24px; color:#FCA5A5; font-weight:bold;">${var_95:.2f}</div></div>', unsafe_allow_html=True)
+                    rm2.markdown(f'<div class="metric-card"><div style="color:#64748B;">Value at Risk</div><div style="font-size:24px; color:#FCA5A5; font-weight:bold;">${var_95:.2f}</div></div>', unsafe_allow_html=True)
                     rm3.markdown(f'<div class="metric-card"><div style="color:#64748B;">Expected Shortfall</div><div style="font-size:24px; color:#EF4444; font-weight:bold;">${cvar_95:.2f}</div></div>', unsafe_allow_html=True)
-                    rm4.markdown(f'<div class="metric-card"><div style="color:#64748B;">Mejor Esc. ({(1-alpha)*100:.0f}%)</div><div style="font-size:24px; color:#6EE7B7; font-weight:bold;">${mejor_escenario:.2f}</div></div>', unsafe_allow_html=True)
+                    rm4.markdown(f'<div class="metric-card"><div style="color:#64748B;">Mejor Escenario ({(1-alpha)*100:.0f}%)</div><div style="font-size:24px; color:#00FF66; font-weight:bold;">${mejor_escenario:.2f}</div></div>', unsafe_allow_html=True)
 
                     csv_buffer = io.StringIO()
                     pd.DataFrame(price_paths).to_csv(csv_buffer, index=False)
@@ -285,16 +386,16 @@ if len(data) >= 2:
             p_val_kupiec = stats.binom_test(n_excepciones, n_obs, alpha, alternative='two-sided')
 
         c_b1, c_b2, c_b3, c_b4 = st.columns(4)
-        c_b1.markdown(f'<div class="metric-card"><div style="color:#64748B;">Límite VaR ({(alpha)*100:.0f}%)</div><div style="font-size:24px; color:#4FC3F7; font-weight:bold;">{var_teorico:.2f}%</div></div>', unsafe_allow_html=True)
+        c_b1.markdown(f'<div class="metric-card"><div style="color:#64748B;">Límite VaR ({(1-alpha)*100:.0f}%)</div><div style="font-size:24px; color:#4FC3F7; font-weight:bold;">{var_teorico:.2f}%</div></div>', unsafe_allow_html=True)
         c_b2.markdown(f'<div class="metric-card"><div style="color:#64748B;">Excepciones Esperadas</div><div style="font-size:24px; color:#4FC3F7; font-weight:bold;">{excepciones_esperadas:.1f}</div></div>', unsafe_allow_html=True)
         
-        color_excepcion = "#6EE7B7" if p_val_kupiec >= 0.05 else "#EF4444"
+        color_excepcion = "#00FF66" if p_val_kupiec >= 0.05 else "#EF4444"
         c_b3.markdown(f'<div class="metric-card"><div style="color:#64748B;">Excepciones Reales</div><div style="font-size:24px; color:{color_excepcion}; font-weight:bold;">{n_excepciones}</div></div>', unsafe_allow_html=True)
         c_b4.markdown(f'<div class="metric-card"><div style="color:#64748B;">Tasa de Falla Real</div><div style="font-size:24px; color:#4FC3F7; font-weight:bold;">{tasa_empirica*100:.2f}%</div></div>', unsafe_allow_html=True)
 
         fig5, ax5 = plt.subplots(figsize=(12, 4))
         ax5.plot(data, color="#0284C7", alpha=0.6, label="Rendimientos Diarios", lw=1)
-        ax5.axhline(var_teorico, color="#EF4444", lw=2, linestyle="--", label=f"Barrera VaR ({(alpha)*100:.0f}%)")
+        ax5.axhline(var_teorico, color="#EF4444", lw=2, linestyle="--", label=f"Barrera VaR ({(1-alpha)*100:.0f}%)")
         
         indices_excepcion = np.where(data < var_teorico)[0]
         ax5.scatter(indices_excepcion, data[indices_excepcion], color="#EF4444", s=25, zorder=5, label="Excepciones (Brechas)")
