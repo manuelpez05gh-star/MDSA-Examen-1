@@ -33,6 +33,78 @@ def construir_multinomial_1d(n_trials, probs):
     pk = poly / poly.sum()
     return stats.rv_discrete(name='multinomial_1d', values=(xk, pk)), probs
 
+def calcular_bondad_chi2(data, cdf_func, num_params_estimados=0, n_bins=12, alpha=0.05):
+    """
+    Ejecuta la prueba de bondad de ajuste Chi-cuadrada de Pearson agrupando automáticamente
+    intervalos con frecuencia esperada < 5 (Regla de Cochran) y ajustando grados de libertad.
+    """
+    n = len(data)
+    f_obs_raw, bin_edges = np.histogram(data, bins=n_bins)
+    
+    cdf_vals = cdf_func(bin_edges)
+    probs = np.zeros(len(f_obs_raw), dtype=float)
+    probs[0] = max(0.0, cdf_vals[1])
+    for i in range(1, len(f_obs_raw) - 1):
+        probs[i] = max(0.0, cdf_vals[i+1] - cdf_vals[i])
+    probs[-1] = max(0.0, 1.0 - cdf_vals[-2])
+    
+    if np.sum(probs) <= 1e-12:
+        probs = np.ones_like(probs) / len(probs)
+    else:
+        probs = probs / np.sum(probs)
+        
+    f_exp_raw = n * probs
+    
+    # Agrupar intervalos adyacentes donde E_i < 5
+    f_obs_list, f_exp_list, labels_list = [], [], []
+    obs_acum = 0
+    exp_acum = 0.0
+    left_edge = bin_edges[0]
+    
+    for i, (o, e) in enumerate(zip(f_obs_raw, f_exp_raw)):
+        obs_acum += o
+        exp_acum += e
+        right_edge = bin_edges[i+1]
+        if exp_acum >= 5.0:
+            f_obs_list.append(obs_acum)
+            f_exp_list.append(exp_acum)
+            labels_list.append(f"[{left_edge:.2f}, {right_edge:.2f}]")
+            obs_acum = 0
+            exp_acum = 0.0
+            left_edge = right_edge
+            
+    if exp_acum > 0 or obs_acum > 0:
+        if len(f_exp_list) > 0:
+            f_obs_list[-1] += obs_acum
+            f_exp_list[-1] += exp_acum
+            prev_left = labels_list[-1].split(",")[0]
+            labels_list[-1] = f"{prev_left}, {bin_edges[-1]:.2f}]"
+        else:
+            f_obs_list.append(obs_acum)
+            f_exp_list.append(max(exp_acum, 1e-6))
+            labels_list.append(f"[{bin_edges[0]:.2f}, {bin_edges[-1]:.2f}]")
+            
+    f_obs = np.array(f_obs_list, dtype=float)
+    f_exp = np.array(f_exp_list, dtype=float)
+    f_exp = f_exp * (np.sum(f_obs) / np.sum(f_exp))
+    
+    k_clases = len(f_obs)
+    gl = max(1, k_clases - 1 - num_params_estimados)
+    
+    aportes_chi2 = ((f_obs - f_exp) ** 2) / np.maximum(f_exp, 1e-9)
+    chi2_stat = float(np.sum(aportes_chi2))
+    chi2_pval = float(1.0 - stats.chi2.cdf(chi2_stat, df=gl))
+    chi2_crit = float(stats.chi2.ppf(1.0 - alpha, df=gl))
+    
+    df_tabla = pd.DataFrame({
+        "Intervalo / Clase": labels_list,
+        "Frec. Observada (Oi)": f_obs.astype(int),
+        "Frec. Esperada (Ei)": np.round(f_exp, 2),
+        "Estadístico (Oi - Ei)² / Ei": np.round(aportes_chi2, 4)
+    })
+    
+    return chi2_stat, chi2_pval, chi2_crit, gl, k_clases, f_obs, f_exp, labels_list, df_tabla
+
 st.markdown("""
 <style>
     #MainMenu { visibility: hidden; }
@@ -112,6 +184,12 @@ with st.sidebar:
     dist_test = dist_map[dist_sel]
     
     alpha = st.selectbox("Nivel de Confianza (α):", [0.10, 0.05, 0.01], index=1, format_func=lambda x: f"{(1-x)*100:.0f}% (α={x})")
+    n_bins_chi2 = st.slider("Intervalos iniciales (Prueba Chi²):", min_value=6, max_value=30, value=12, step=1)
+    criterio_desbloqueo = st.selectbox(
+        "Criterio para desbloquear Monte Carlo:",
+        ["Al menos una prueba (K-S o Chi²)", "Solo Prueba K-S", "Solo Prueba Chi-cuadrada", "Ambas pruebas simultáneamente"],
+        index=0
+    )
     modo_estimacion = st.radio("Método de parametrización:", ["Automático (MLE)", "Manual"], horizontal=True)
     
     params_manuales = {}
@@ -181,6 +259,7 @@ elif file_csv is not None and col_csv is not None:
 
 dist_obj = None
 fit_params = ()
+num_params_est = 0
 es_discreta = dist_test in ["pois", "geom", "binom", "bernoulli", "nbinom", "hypergeom", "randint", "multinomial"]
 
 if len(data) >= 2:
@@ -188,22 +267,28 @@ if len(data) >= 2:
         if dist_test == "t":
             fit_params = stats.t.fit(data)
             dist_obj = stats.t(*fit_params)
+            num_params_est = 3
         elif dist_test == "norm":
             fit_params = stats.norm.fit(data)
             dist_obj = stats.norm(*fit_params)
+            num_params_est = 2
         elif dist_test == "lnorm":
             shift = abs(min(data)) + 1e-4 if min(data) <= 0 else 0
             fit_params = stats.lognorm.fit(data + shift)
             dist_obj = stats.lognorm(*fit_params)
+            num_params_est = 3
         elif dist_test == "laplace":
             fit_params = stats.laplace.fit(data)
             dist_obj = stats.laplace(*fit_params)
+            num_params_est = 2
         elif dist_test == "exp":
             fit_params = stats.expon.fit(data)
             dist_obj = stats.expon(*fit_params)
+            num_params_est = 2
         elif dist_test == "chisq":
             fit_params = stats.chi2.fit(data)
             dist_obj = stats.chi2(*fit_params)
+            num_params_est = 3
         elif dist_test == "erlang":
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -212,15 +297,18 @@ if len(data) >= 2:
                 _, loc_er, scale_er = stats.gamma.fit(data, fa=k_er)
             fit_params = (k_er, loc_er, scale_er)
             dist_obj = stats.erlang(a=k_er, loc=loc_er, scale=scale_er)
+            num_params_est = 3
         elif dist_test == "pois":
             lam_est = float(max(np.mean(data), 0.0001))
             fit_params = (lam_est,)
             dist_obj = stats.poisson(mu=lam_est)
+            num_params_est = 1
         elif dist_test == "geom":
             media_pos = max(float(np.mean(data)), 1.0001)
             p_est = float(np.clip(1.0 / media_pos, 0.0001, 1.0))
             fit_params = (p_est,)
             dist_obj = stats.geom(p=p_est)
+            num_params_est = 1
         elif dist_test == "binom":
             media_b = max(float(np.mean(data)), 0.01)
             var_b = float(np.var(data, ddof=1))
@@ -233,11 +321,13 @@ if len(data) >= 2:
                 p_est = float(np.clip(media_b / n_est, 0.0001, 0.9999))
             fit_params = (n_est, p_est)
             dist_obj = stats.binom(n=n_est, p=p_est)
+            num_params_est = 2
         elif dist_test == "bernoulli":
             prop_pos = np.mean(data > 0) if (np.min(data) < 0 or np.max(data) > 1) else np.mean(data)
             p_bern = float(np.clip(prop_pos, 0.0001, 0.9999))
             fit_params = (p_bern,)
             dist_obj = stats.bernoulli(p=p_bern)
+            num_params_est = 1
         elif dist_test == "nbinom":
             media_nb = max(float(np.mean(np.maximum(data, 0))), 0.01)
             var_nb = float(np.var(data, ddof=1))
@@ -249,6 +339,7 @@ if len(data) >= 2:
                 r_nb = max(int(round(media_nb)), 1)
             fit_params = (r_nb, p_nb)
             dist_obj = stats.nbinom(n=r_nb, p=p_nb)
+            num_params_est = 2
         elif dist_test == "hypergeom":
             N_hyp = max(int(round(np.max(np.abs(data)))), 10)
             M_hyp = N_hyp * 2
@@ -256,6 +347,7 @@ if len(data) >= 2:
             K_hyp = int(np.clip(round(media_pos * (M_hyp / N_hyp)), 1, M_hyp - 1))
             fit_params = (M_hyp, K_hyp, N_hyp)
             dist_obj = stats.hypergeom(M=M_hyp, n=K_hyp, N=N_hyp)
+            num_params_est = 3
         elif dist_test == "randint":
             low_ud = int(np.floor(np.min(data)))
             high_ud = int(np.ceil(np.max(data)))
@@ -263,13 +355,16 @@ if len(data) >= 2:
                 high_ud = low_ud + 1
             fit_params = (low_ud, high_ud)
             dist_obj = stats.randint(low=low_ud, high=high_ud + 1)
+            num_params_est = 2
         elif dist_test == "multinomial":
             k_cat = 5
             datos_cat = np.clip(np.round(data[data >= 0]), 0, k_cat - 1).astype(int) if np.any(data >= 0) else np.zeros(10, dtype=int)
             conteos = np.bincount(datos_cat, minlength=k_cat)[:k_cat] + 1e-4
             dist_obj, pk_norm = construir_multinomial_1d(1, conteos)
             fit_params = (1, k_cat, np.round(pk_norm, 4).tolist())
+            num_params_est = k_cat - 1
     else:
+        num_params_est = 0
         if dist_test == "t":
             dist_obj = stats.t(df=params_manuales['df_t'], loc=params_manuales['loc_t'], scale=params_manuales['scale_t'])
         elif dist_test == "norm":
@@ -311,12 +406,29 @@ if len(data) >= 2:
 # 3. RENDERIZADO DEL PANEL PRINCIPAL
 # ==============================================================================
 if len(data) >= 2:
-    # Función segura de CDF para evitar NaNs en distribuciones discretas como Hipergeométrica
+    # 1. Prueba Kolmogorov-Smirnov (K-S)
     cdf_evaluar = (lambda x: dist_obj.cdf(np.floor(x))) if es_discreta else dist_obj.cdf
     ks_stat, ks_pval = stats.kstest(data, cdf_evaluar)
     
+    # 2. Prueba Chi-cuadrada de Bondad de Ajuste
+    chi2_stat, chi2_pval, chi2_crit, chi2_gl, chi2_k, f_obs_c, f_exp_c, labels_c, df_chi2 = calcular_bondad_chi2(
+        data, cdf_evaluar, num_params_estimados=num_params_est, n_bins=n_bins_chi2, alpha=alpha
+    )
+    
+    # Evaluar condición de desbloqueo para Monte Carlo
+    pasa_ks = ks_pval >= alpha
+    pasa_chi2 = chi2_pval >= alpha
+    if criterio_desbloqueo == "Al menos una prueba (K-S o Chi²)":
+        modelo_validado = pasa_ks or pasa_chi2
+    elif criterio_desbloqueo == "Solo Prueba K-S":
+        modelo_validado = pasa_ks
+    elif criterio_desbloqueo == "Solo Prueba Chi-cuadrada":
+        modelo_validado = pasa_chi2
+    else:
+        modelo_validado = pasa_ks and pasa_chi2
+    
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 Diagnóstico", "📜 Reporte K-S", "📋 Análisis Estadístico", 
+        "📊 Diagnóstico", "📜 Reporte K-S & Chi²", "📋 Análisis Estadístico", 
         "🔮 Monte Carlo & Riesgo", "📈 Backtesting VaR"
     ])
     
@@ -363,6 +475,20 @@ if len(data) >= 2:
             ax2.grid(True, alpha=0.3)
             st.pyplot(fig2)
             
+        # Gráfica adicional: Frecuencias Observadas vs Esperadas (Chi-cuadrada)
+        fig_chi, ax_chi = plt.subplots(figsize=(12, 3.2))
+        idx_clases = np.arange(len(labels_c))
+        ancho_barra = 0.38
+        ax_chi.bar(idx_clases - ancho_barra/2, f_obs_c, width=ancho_barra, color="#0284C7", edgecolor="#4FC3F7", label="Frecuencia Observada (Oi)")
+        ax_chi.bar(idx_clases + ancho_barra/2, f_exp_c, width=ancho_barra, color="#1E293B", edgecolor="#00E5FF", hatch="//", label="Frecuencia Esperada (Ei)")
+        ax_chi.set_xticks(idx_clases)
+        ax_chi.set_xticklabels(labels_c, rotation=20, ha="right", fontsize=9)
+        ax_chi.set_title(f"Contraste de Frecuencias por Clase Agrupada (Prueba Chi-cuadrada - {chi2_k} clases)")
+        ax_chi.set_ylabel("Frecuencia (Datos)")
+        ax_chi.legend(frameon=False)
+        ax_chi.grid(True, alpha=0.2)
+        st.pyplot(fig_chi)
+            
         if modo_estimacion == "Automático (MLE)":
             params_str = ""
             if dist_test == "t":
@@ -394,31 +520,60 @@ if len(data) >= 2:
             
             st.markdown(f"""<div class="well"><b>⚙️ Parámetros Optimizados:</b><br>{params_str}</div>""", unsafe_allow_html=True)
 
-    # --- TAB 2: REPORTE ---
+    # --- TAB 2: REPORTE K-S & CHI-CUADRADA ---
     with tab2:
-        st.markdown("<br><h4>Dictamen Estadístico de Ajuste</h4>", unsafe_allow_html=True)
-        decision = "RECHAZAR H0" if ks_pval < alpha else "NO RECHAZAR H0"
+        st.markdown("<br><h4>Dictamen Estadístico de Bondad de Ajuste</h4>", unsafe_allow_html=True)
+        col_rep1, col_rep2 = st.columns(2)
         
-        st.code(f"""
-        =========================================================
-          TEST KOLMOGOROV-SMIRNOV - RESULTADOS ANALÍTICOS
-        =========================================================
-          Modelo de ajuste     : {dist_sel}
-          Método de parametriz : {modo_estimacion}
-          Muestra observada (n): {len(data)}
-          Nivel de Alpha (α)   : {alpha}
+        with col_rep1:
+            decision_ks = "RECHAZAR H0" if not pasa_ks else "NO RECHAZAR H0"
+            st.code(f"""
+=========================================================
+  1. PRUEBA KOLMOGOROV-SMIRNOV (K-S)
+=========================================================
+  Modelo evaluado      : {dist_sel}
+  Método de ajuste     : {modo_estimacion}
+  Muestra observada (n): {len(data)}
+  Significancia (α)    : {alpha}
 
-          Estadístico D        : {ks_stat:.6f}
-          P-Value              : {ks_pval:.6e}
-          
-          Conclusión del Test  : {decision}
-        =========================================================
-        """, language='text')
-        
-        if ks_pval < alpha:
-            st.markdown(f'<div class="alert-danger"><b>❌ RECHAZO DE HIPÓTESIS:</b> La evidencia estadística (p-value={ks_pval:.4g}) indica que los datos no siguen una distribución {dist_sel}.</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="alert-success"><b>✅ VALIDACIÓN EXITOSA:</b> El p-value ({ks_pval:.4g}) es mayor que α. La distribución {dist_sel} captura adecuadamente el comportamiento probabilístico de la muestra.</div>', unsafe_allow_html=True)
+  Estadístico D        : {ks_stat:.6f}
+  P-Value              : {ks_pval:.6e}
+  
+  Conclusión K-S       : {decision_ks}
+=========================================================
+            """, language='text')
+            
+            if not pasa_ks:
+                st.markdown(f'<div class="alert-danger"><b>❌ K-S RECHAZA H0:</b> El p-value ({ks_pval:.4g}) es menor que α ({alpha}). La distancia vertical máxima D supera el umbral crítico.</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="alert-success"><b>✅ K-S VALIDA H0:</b> El p-value ({ks_pval:.4g}) es mayor o igual que α ({alpha}). La FDA empírica se ajusta al modelo teórico.</div>', unsafe_allow_html=True)
+
+        with col_rep2:
+            decision_chi2 = "RECHAZAR H0" if not pasa_chi2 else "NO RECHAZAR H0"
+            st.code(f"""
+=========================================================
+  2. PRUEBA CHI-CUADRADA DE PEARSON (χ²)
+=========================================================
+  Clases agrupadas (k) : {chi2_k} (Frec. Esp. ≥ 5)
+  Parámetros est. (m)  : {num_params_est}
+  Grados libertad (gl) : {chi2_gl}
+  Valor Crítico χ²(α)  : {chi2_crit:.4f}
+
+  Estadístico χ²       : {chi2_stat:.4f}
+  P-Value              : {chi2_pval:.6e}
+  
+  Conclusión Chi²      : {decision_chi2}
+=========================================================
+            """, language='text')
+            
+            if not pasa_chi2:
+                st.markdown(f'<div class="alert-danger"><b>❌ CHI² RECHAZA H0:</b> El estadístico χ² ({chi2_stat:.4f}) supera el valor crítico ({chi2_crit:.4f}), con p-value={chi2_pval:.4g} &lt; α.</div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="alert-success"><b>✅ CHI² VALIDA H0:</b> El estadístico χ² ({chi2_stat:.4f}) es menor al valor crítico ({chi2_crit:.4f}), con p-value={chi2_pval:.4g} ≥ α.</div>', unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        with st.expander("📋 Ver Tabla Desglosada de Clases y Frecuencias (Prueba Chi-cuadrada)", expanded=False):
+            st.dataframe(df_chi2, use_container_width=True, hide_index=True)
 
     # --- TAB 3: RESUMEN ESTADÍSTICO ---
     with tab3:
@@ -436,8 +591,8 @@ if len(data) >= 2:
     with tab4:
         st.markdown("<br><h4>Motor Estocástico (Random Walk)</h4>", unsafe_allow_html=True)
         
-        if ks_pval >= alpha:
-            st.success("Condición matemática superada. Motor de simulación desbloqueado.")
+        if modelo_validado:
+            st.success(f"Condición matemática superada según el criterio seleccionado ({criterio_desbloqueo}). Motor desbloqueado.")
             c_mc1, c_mc2, c_mc3 = st.columns(3)
             with c_mc1: n_paths = st.number_input("Trayectorias (Escenarios):", min_value=100, max_value=50000, value=2000, step=1000)
             with c_mc2: n_days = st.number_input("Horizonte (Días):", min_value=10, max_value=1000, value=252)
@@ -479,7 +634,7 @@ if len(data) >= 2:
                     pd.DataFrame(price_paths).to_csv(csv_buffer, index=False)
                     st.download_button(label="📥 Exportar Matriz de Trayectorias (CSV)", data=csv_buffer.getvalue(), file_name="simulacion_monte_carlo.csv", mime="text/csv")
         else:
-            st.markdown('<div class="alert-danger" style="margin-top: 0;"><b>🛑 Bloqueado por Riesgo de Modelo:</b> Ajusta el modelo a una distribución válida (p-value ≥ α) antes de simular.</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="alert-danger" style="margin-top: 0;"><b>🛑 Bloqueado por Riesgo de Modelo:</b> El modelo no cumple con el criterio seleccionado (<b>{criterio_desbloqueo}</b>) para α = {alpha}. Ajusta la distribución o los parámetros antes de simular.</div>', unsafe_allow_html=True)
 
     # --- TAB 5: BACKTESTING VAR ---
     with tab5:
