@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import scipy.stats as stats
 import matplotlib.pyplot as plt
+import yfinance as yf
 import warnings
 import io
 
@@ -15,6 +16,27 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def descargar_datos_financieros(ticker, anios):
+    """
+    Descarga el historial de precios de cierre desde Yahoo Finance para el
+    horizonte seleccionado (1 a 5 años) y calcula los rendimientos diarios (%).
+    """
+    tkr = yf.Ticker(ticker.strip().upper())
+    df_mkt = tkr.history(period=f"{int(anios)}y")
+    if df_mkt is None or df_mkt.empty or 'Close' not in df_mkt.columns:
+        return None, None, None, None
+    
+    precios = df_mkt['Close'].dropna()
+    if len(precios) < 2:
+        return None, None, None, None
+        
+    rendimientos = (precios.pct_change().dropna() * 100.0).values
+    precio_spot = float(precios.iloc[-1])
+    fecha_inicio = precios.index[0].strftime('%Y-%m-%d')
+    fecha_fin = precios.index[-1].strftime('%Y-%m-%d')
+    return rendimientos, precio_spot, fecha_inicio, fecha_fin
 
 def construir_multinomial_1d(n_trials, probs):
     """
@@ -136,15 +158,60 @@ st.markdown("<hr>", unsafe_allow_html=True)
 # ==============================================================================
 df = None
 p0_default = 100.0
+data = np.array([])
 
 with st.sidebar:
     st.markdown("<h4 style='color: #4FC3F7;'>1. Carga de Datos</h4>", unsafe_allow_html=True)
-    origen_datos = st.radio("Fuente de información:", ["Cargar Archivo CSV", "Generar Datos Simulados"])
+    origen_datos = st.radio(
+        "Fuente de información:",
+        ["Conexión Bursátil (Tiempo Real)", "Cargar Archivo CSV", "Generar Datos Simulados"]
+    )
     
-    if origen_datos == "Generar Datos Simulados":
+    if origen_datos == "Conexión Bursátil (Tiempo Real)":
+        catalogo_tickers = {
+            "Palantir Technologies (PLTR)": "PLTR",
+            "NVIDIA Corp. (NVDA)": "NVDA",
+            "Apple Inc. (AAPL)": "AAPL",
+            "Microsoft Corp. (MSFT)": "MSFT",
+            "Tesla Inc. (TSLA)": "TSLA",
+            "Amazon.com Inc. (AMZN)": "AMZN",
+            "Alphabet Inc. (GOOGL)": "GOOGL",
+            "Meta Platforms (META)": "META",
+            "S&P 500 ETF (SPY)": "SPY",
+            "Bitcoin USD (BTC-USD)": "BTC-USD",
+            "Otro Ticker personalizado...": "CUSTOM"
+        }
+        seleccion_activo = st.selectbox("Seleccione el activo financiero:", list(catalogo_tickers.keys()), index=0)
+        
+        if catalogo_tickers[seleccion_activo] == "CUSTOM":
+            ticker_activo = st.text_input("Ingrese el Ticker (ej. AMD, NFLX, WALMEX.MX):", value="AMD").strip().upper()
+        else:
+            ticker_activo = catalogo_tickers[seleccion_activo]
+            
+        anios_hist = st.slider(
+            "Temporalidad histórica hacia atrás (Años):",
+            min_value=1, max_value=5, value=3, step=1,
+            help="Extrae los cierres diarios desde hace N años hasta el día de hoy."
+        )
+        
+        if ticker_activo:
+            with st.spinner(f"Descargando historial de {ticker_activo}..."):
+                rend_mkt, spot_mkt, f_ini, f_fin = descargar_datos_financieros(ticker_activo, anios_hist)
+                if rend_mkt is not None:
+                    data = rend_mkt
+                    p0_default = spot_mkt
+                    st.success(f"**{ticker_activo}** conectado ({len(data)} rendimientos)")
+                    st.caption(f"📅 **Periodo:** {f_ini} al {f_fin}  \n💵 **Último Cierre (Spot):** ${p0_default:,.2f}")
+                else:
+                    st.error(f"No se encontraron datos para el ticker '{ticker_activo}'. Verifique el símbolo.")
+
+    elif origen_datos == "Generar Datos Simulados":
         n_sim = st.number_input("Tamaño muestral (n):", min_value=10, max_value=5000, value=500, step=1)
         gl_sim = st.number_input("Grados de libertad (df):", min_value=1, value=7, step=1)
         st.caption("Datos generados mediante distribución Chi-cuadrada.")
+        np.random.seed(42)
+        data = np.random.chisquare(df=gl_sim, size=n_sim)
+        
     else:
         file_csv = st.file_uploader("Seleccione archivo CSV:", type=["csv"])
         sep_csv = st.selectbox("Separador de columnas:", [",", ";"])
@@ -156,6 +223,9 @@ with st.sidebar:
                 col_csv = st.selectbox("Variable a modelar (Rendimientos):", options=df.columns, index=default_idx)
                 if 'Price' in df.columns:
                     p0_default = float(str(df['Price'].iloc[0]).replace(',', ''))
+                if col_csv is not None:
+                    col_limpia = df[col_csv].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False)
+                    data = pd.to_numeric(col_limpia, errors='coerce').dropna().values
             except Exception as e:
                 st.error(f"Error de lectura: {e}")
         st.caption("Auto-limpieza de caracteres especiales (%, $) activada.")
@@ -247,16 +317,8 @@ with st.sidebar:
     ejecutar = st.button("▶ Procesar Modelo Matemático")
 
 # ==============================================================================
-# 2. PROCESAMIENTO DE DATOS Y ESTIMACIÓN DE PARÁMETROS
+# 2. ESTIMACIÓN DE PARÁMETROS DEL MODELO
 # ==============================================================================
-data = np.array([])
-if origen_datos == "Generar Datos Simulados":
-    np.random.seed(42)
-    data = np.random.chisquare(df=gl_sim, size=n_sim)
-elif file_csv is not None and col_csv is not None:
-    col_limpia = df[col_csv].astype(str).str.replace('%', '', regex=False).str.replace(',', '', regex=False)
-    data = pd.to_numeric(col_limpia, errors='coerce').dropna().values
-
 dist_obj = None
 fit_params = ()
 num_params_est = 0
@@ -681,5 +743,5 @@ if len(data) >= 2:
         else:
             st.markdown(f'<div class="alert-success"><b>🟢 MODELO ROBUSTO (BACKTESTED):</b> El p-value ({p_val_kupiec:.4f}) valida estadísticamente que las excepciones reales se alinean con la precisión teórica exigida por el regulador. El VaR es confiable.</div>', unsafe_allow_html=True)
 
-elif file_csv is not None:
-    st.warning("Se requieren al menos 2 datos numéricos para procesar el modelo.")
+else:
+    st.warning("Se requieren al menos 2 datos numéricos válidos para procesar el modelo.")
