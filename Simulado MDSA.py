@@ -977,7 +977,7 @@ if len(data) >= 2:
                     if metodo_mc == "Movimiento Browniano Geométrico (GBM)":
                         mu_d = np.mean(rend_base) / 100.0
                         sigma_d = np.std(rend_base, ddof=1) / 100.0
-                        z_ shocks = np.random.standard_normal(size=(int(n_days), int(n_paths)))
+                        z_shocks = np.random.standard_normal(size=(int(n_days), int(n_paths)))
                         factores_diarios = np.exp((mu_d - 0.5 * (sigma_d ** 2)) + sigma_d * z_shocks)
                         price_paths = p_initial * np.cumprod(factores_diarios, axis=0)
                     elif metodo_mc == "Bootstrap Histórico (No Paramétrico)":
